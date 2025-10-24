@@ -5,7 +5,7 @@ from typing import Any, List, Optional, Union
 import pydantic
 from pydantic import BaseModel
 
-# 忽略 Pydantic 的特定警告
+# Silence pydantic warnings about field names shadowing parent attributes.
 warnings.filterwarnings(
     "ignore",
     category=UserWarning,
@@ -19,7 +19,7 @@ class VideoConcatMode(str, Enum):
 
 
 class VideoTransitionMode(str, Enum):
-    none = None
+    none = "none"
     shuffle = "Shuffle"
     fade_in = "FadeIn"
     fade_out = "FadeOut"
@@ -32,12 +32,12 @@ class VideoAspect(str, Enum):
     portrait = "9:16"
     square = "1:1"
 
-    def to_resolution(self):
-        if self == VideoAspect.landscape.value:
+    def to_resolution(self) -> tuple[int, int]:
+        if self == VideoAspect.landscape:
             return 1920, 1080
-        elif self == VideoAspect.portrait.value:
+        elif self == VideoAspect.portrait:
             return 1080, 1920
-        elif self == VideoAspect.square.value:
+        elif self == VideoAspect.square:
             return 1080, 1080
         return 1080, 1920
 
@@ -54,35 +54,27 @@ class MaterialInfo:
 
 
 class VideoParams(BaseModel):
-    """
-    {
-      "video_subject": "",
-      "video_aspect": "横屏 16:9（西瓜视频）",
-      "voice_name": "女生-晓晓",
-      "bgm_name": "random",
-      "font_name": "STHeitiMedium 黑体-中",
-      "text_color": "#FFFFFF",
-      "font_size": 60,
-      "stroke_color": "#000000",
-      "stroke_width": 1.5
-    }
-    """
+    """Parameter payload for video generation."""
 
     video_subject: str
     video_script: str = ""  # Script used to generate the video
-    video_terms: Optional[str | list] = None  # Keywords used to generate the video
-    video_aspect: Optional[VideoAspect] = VideoAspect.portrait.value
-    video_concat_mode: Optional[VideoConcatMode] = VideoConcatMode.random.value
-    video_transition_mode: Optional[VideoTransitionMode] = None
+    video_terms: Optional[Union[str, List[str]]] = None  # Keywords used to generate the video
+    video_aspect: Optional[VideoAspect] = VideoAspect.portrait
+    video_concat_mode: Optional[VideoConcatMode] = VideoConcatMode.random
+    video_transition_mode: Optional[VideoTransitionMode] = VideoTransitionMode.none
     video_clip_duration: Optional[int] = 5
     video_count: Optional[int] = 1
 
-    video_source: Optional[str] = "pexels"
+    video_source: Optional[str] = "pexels"  # pexels, pixabay, local, comfyui
     video_materials: Optional[List[MaterialInfo]] = (
         None  # Materials used to generate the video
     )
 
     video_language: Optional[str] = ""  # auto detect
+    
+    # ComfyUI specific parameters
+    comfyui_prompt: Optional[str] = ""  # Prompt for AI video generation
+    comfyui_frames: Optional[int] = 24  # Number of frames to generate
 
     voice_name: Optional[str] = ""
     voice_volume: Optional[float] = 1.0
@@ -197,7 +189,7 @@ class TaskResponse(BaseResponse):
     class TaskResponseData(BaseModel):
         task_id: str
 
-    data: TaskResponseData
+    data: Optional[TaskResponseData] = None
 
     class Config:
         json_schema_extra = {
@@ -301,3 +293,7 @@ class BgmUploadResponse(BaseResponse):
                 "data": {"file": "/MoneyPrinterTurbo/resource/songs/example.mp3"},
             },
         }
+
+
+
+

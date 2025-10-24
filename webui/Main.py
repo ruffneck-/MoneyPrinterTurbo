@@ -544,6 +544,7 @@ with middle_panel:
             (tr("Pexels"), "pexels"),
             (tr("Pixabay"), "pixabay"),
             (tr("Local file"), "local"),
+            (tr("ComfyUI"), "comfyui"),
             (tr("TikTok"), "douyin"),
             (tr("Bilibili"), "bilibili"),
             (tr("Xiaohongshu"), "xiaohongshu"),
@@ -562,6 +563,23 @@ with middle_panel:
         )
         params.video_source = video_sources[selected_index][1]
         config.app["video_source"] = params.video_source
+
+        # Add ComfyUI specific settings when ComfyUI is selected
+        if params.video_source == "comfyui":
+            params.comfyui_prompt = st.text_area(
+                tr("ComfyUI Prompt"), 
+                value=st.session_state.get("comfyui_prompt", ""),
+                help="Enter a prompt to guide AI video generation. If left empty, video keywords will be used."
+            )
+            params.comfyui_frames = st.slider(
+                tr("Number of Frames"),
+                min_value=12,
+                max_value=60,
+                value=st.session_state.get("comfyui_frames", 24),
+                help="More frames = longer video but slower generation"
+            )
+            st.session_state["comfyui_prompt"] = params.comfyui_prompt
+            st.session_state["comfyui_frames"] = params.comfyui_frames
 
         if params.video_source == "local":
             uploaded_files = st.file_uploader(

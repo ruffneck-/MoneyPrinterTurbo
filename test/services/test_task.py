@@ -29,12 +29,12 @@ class TestTaskService(unittest.TestCase):
             ))
 
         params = VideoParams(
-            video_subject="金钱的作用",
-            video_script="金钱不仅是交换媒介，更是社会资源的分配工具。它能满足基本生存需求，如食物和住房，也能提供教育、医疗等提升生活品质的机会。拥有足够的金钱意味着更多选择权，比如职业自由或创业可能。但金钱的作用也有边界，它无法直接购买幸福、健康或真诚的人际关系。过度追逐财富可能导致价值观扭曲，忽视精神层面的需求。理想的状态是理性看待金钱，将其作为实现目标的工具而非终极目的。",
+            video_subject="Money importance",
+            video_script="Money influences personal choices and shapes how societies prioritize resources.",
             video_terms="money importance, wealth and society, financial freedom, money and happiness, role of money",
             video_aspect="9:16",
             video_concat_mode="random",
-            video_transition_mode="None",
+            video_transition_mode="none",
             video_clip_duration=3,
             video_count=1,
             video_source="local",
@@ -56,7 +56,7 @@ class TestTaskService(unittest.TestCase):
             stroke_color="#000000",
             stroke_width=1.5,
             n_threads=2,
-            paragraph_number=1
+            paragraph_number=1,
         )
         result = tm.start(task_id=task_id, params=params)
         print(result)
@@ -64,3 +64,4 @@ class TestTaskService(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main() 
+

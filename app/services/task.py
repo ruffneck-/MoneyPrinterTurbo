@@ -42,7 +42,9 @@ def generate_terms(task_id, params, video_script):
         )
     else:
         if isinstance(video_terms, str):
-            video_terms = [term.strip() for term in re.split(r"[,，]", video_terms)]
+            video_terms = [
+                term.strip() for term in re.split(r"[,，\s]+", video_terms)
+            ]
         elif isinstance(video_terms, list):
             video_terms = [term.strip() for term in video_terms]
         else:
@@ -136,6 +138,29 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             )
             return None
         return [material_info.url for material_info in materials]
+    elif params.video_source == "comfyui":
+        logger.info("\n\n## generating video with ComfyUI")
+        from app.services.comfyui import ComfyUIService
+        comfyui = ComfyUIService()
+        
+        # Use video terms as prompt if no specific prompt is provided
+        prompt = params.comfyui_prompt if params.comfyui_prompt else ", ".join(video_terms)
+        
+        output_dir = utils.task_dir(task_id)
+        video_path = comfyui.generate_video(
+            prompt=prompt,
+            video_aspect=params.video_aspect,
+            frames=params.comfyui_frames,
+            output_dir=output_dir
+        )
+        
+        if not video_path:
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            logger.error("Failed to generate video with ComfyUI")
+            return None
+            
+        material = MaterialInfo(provider="comfyui", url=video_path)
+        return [material.url]
     else:
         logger.info(f"\n\n## downloading videos from {params.video_source}")
         downloaded_videos = material.download_videos(
@@ -332,8 +357,10 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
 if __name__ == "__main__":
     task_id = "task_id"
     params = VideoParams(
-        video_subject="金钱的作用",
+        video_subject="Sample subject",
         voice_name="zh-CN-XiaoyiNeural-Female",
         voice_rate=1.0,
     )
     start(task_id, params, stop_at="video")
+
+
