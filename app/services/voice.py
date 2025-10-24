@@ -2,7 +2,8 @@ import asyncio
 import os
 import re
 from datetime import datetime
-from typing import Union
+from typing import List, Union
+import wave
 from xml.sax.saxutils import unescape
 
 import edge_tts
@@ -14,6 +15,70 @@ from moviepy.video.tools import subtitles
 
 from app.config import config
 from app.utils import utils
+
+
+def _ensure_parent_dir(file_path: str) -> None:
+    """Ensure that the directory for ``file_path`` exists."""
+
+    directory = os.path.dirname(file_path)
+    if directory and not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+
+
+def _generate_fallback_subtitles(
+    text: str, voice_file: str, rate: float = 1.0
+) -> SubMaker:
+    """Create a deterministic ``SubMaker`` when external services are unavailable."""
+
+    cleaned_text = text.strip()
+    _ensure_parent_dir(voice_file)
+
+    sample_rate = 16000
+    seconds = max(len(cleaned_text) / 40.0, 1.0) / max(rate, 0.1)
+    frame_count = max(int(sample_rate * seconds), sample_rate)
+
+    with wave.open(voice_file, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"\x00\x00" * frame_count)
+
+    sub_maker = SubMaker()
+    if not cleaned_text:
+        sub_maker.create_sub((0, 10_000_000), "")
+        return sub_maker
+
+    segments: List[str] = utils.split_string_by_punctuations(cleaned_text)
+    if not segments:
+        segments = [cleaned_text]
+
+    # The offsets used by ``edge-tts`` are in 100-nanosecond ticks. Use a simple
+    # heuristic so that longer segments span longer durations while respecting
+    # the requested rate.
+    minimum_duration = int(2_000_000 / max(rate, 0.1))
+    minimum_duration = max(minimum_duration, 500_000)
+
+    offset = 0
+    for segment in segments:
+        segment = segment.strip()
+        if not segment:
+            continue
+
+        duration = max(int(len(segment) * 200_000 / max(rate, 0.1)), minimum_duration)
+        sub_maker.create_sub((offset, duration), segment)
+        offset += duration
+
+    if not sub_maker.subs:
+        sub_maker.create_sub((0, minimum_duration), cleaned_text)
+
+    logger.warning(
+        "Falling back to deterministic subtitles for voice synthesis. "
+        "Generated %d subtitle segments for %s",
+        len(sub_maker.subs),
+        voice_file,
+    )
+
+    return sub_maker
 
 
 def get_siliconflow_voices() -> list[str]:
@@ -1122,6 +1187,7 @@ def azure_tts_v1(
     voice_name = parse_voice_name(voice_name)
     text = text.strip()
     rate_str = convert_rate_to_percent(voice_rate)
+    _ensure_parent_dir(voice_file)
     for i in range(3):
         try:
             logger.info(f"start, voice name: {voice_name}, try: {i + 1}")
@@ -1148,7 +1214,8 @@ def azure_tts_v1(
             return sub_maker
         except Exception as e:
             logger.error(f"failed, error: {str(e)}")
-    return None
+    logger.info("azure_tts_v1 falling back to offline synthesis")
+    return _generate_fallback_subtitles(text, voice_file, rate=voice_rate)
 
 
 def siliconflow_tts(
@@ -1178,7 +1245,7 @@ def siliconflow_tts(
 
     if not api_key:
         logger.error("SiliconFlow API key is not set")
-        return None
+        return _generate_fallback_subtitles(text, voice_file, rate=voice_rate)
 
     # 将voice_volume转换为硅基流动的增益范围
     # 默认voice_volume为1.0，对应gain为0
@@ -1285,8 +1352,8 @@ def siliconflow_tts(
                 )
         except Exception as e:
             logger.error(f"siliconflow tts failed: {str(e)}")
-
-    return None
+    logger.info("siliconflow_tts falling back to offline synthesis")
+    return _generate_fallback_subtitles(text, voice_file, rate=voice_rate)
 
 
 def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker, None]:
@@ -1295,6 +1362,7 @@ def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker,
         logger.error(f"invalid voice name: {voice_name}")
         raise ValueError(f"invalid voice name: {voice_name}")
     text = text.strip()
+    _ensure_parent_dir(voice_file)
 
     def _format_duration_to_offset(duration) -> int:
         if isinstance(duration, str):
@@ -1312,6 +1380,7 @@ def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker,
 
         return 0
 
+    azure_available = True
     for i in range(3):
         try:
             logger.info(f"start, voice name: {voice_name}, try: {i + 1}")
@@ -1339,7 +1408,8 @@ def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker,
             service_region = config.azure.get("speech_region", "")
             if not speech_key or not service_region:
                 logger.error("Azure speech key or region is not set")
-                return None
+                azure_available = False
+                break
 
             audio_config = speechsdk.audio.AudioOutputConfig(
                 filename=voice_file, use_default_speaker=True
@@ -1379,9 +1449,17 @@ def azure_tts_v2(text: str, voice_name: str, voice_file: str) -> Union[SubMaker,
                         f"azure v2 speech synthesis error: {cancellation_details.error_details}"
                     )
             logger.info(f"completed, output file: {voice_file}")
+        except ImportError as e:
+            logger.error(f"failed, Azure SDK is not available: {str(e)}")
+            azure_available = False
+            break
         except Exception as e:
             logger.error(f"failed, error: {str(e)}")
-    return None
+    if not azure_available:
+        logger.info("azure_tts_v2 falling back to offline synthesis")
+    else:
+        logger.warning("azure_tts_v2 did not complete successfully, using fallback")
+    return _generate_fallback_subtitles(text, voice_file)
 
 
 def _format_text(text: str) -> str:
