@@ -4,6 +4,7 @@ import sys
 from uuid import uuid4
 
 import streamlit as st
+import streamlit.components.v1 as components
 from loguru import logger
 
 # Add the root directory of the project to the system path to allow importing modules from the project
@@ -154,7 +155,7 @@ def scroll_to_bottom():
         scroll(1);
     </script>
     """
-    st.components.v1.html(js, height=0, width=0)
+    components.html(js, height=0, width=0)
 
 
 def init_log():
@@ -475,11 +476,11 @@ uploaded_files = []
 with left_panel:
     with st.container(border=True):
         st.write(tr("Video Script Settings"))
-        params.video_subject = st.text_input(
+        params.video_subject = (st.text_input(
             tr("Video Subject"),
             value=st.session_state["video_subject"],
             key="video_subject_input",
-        ).strip()
+        ) or "").strip()
 
         video_languages = [
             (tr("Auto Detect"), ""),
@@ -515,8 +516,8 @@ with left_panel:
                     st.session_state["video_script"] = script
                     st.session_state["video_terms"] = ", ".join(terms)
         params.video_script = st.text_area(
-            tr("Video Script"), value=st.session_state["video_script"], height=280
-        )
+            tr("Video Script"), value=st.session_state.get("video_script", ""), height=280
+        ) or ""
         if st.button(tr("Generate Video Keywords"), key="auto_generate_terms"):
             if not params.video_script:
                 st.error(tr("Please Enter the Video Subject"))
@@ -530,8 +531,8 @@ with left_panel:
                     st.session_state["video_terms"] = ", ".join(terms)
 
         params.video_terms = st.text_area(
-            tr("Video Keywords"), value=st.session_state["video_terms"]
-        )
+            tr("Video Keywords"), value=st.session_state.get("video_terms", "")
+        ) or ""
 
 with middle_panel:
     with st.container(border=True):
@@ -755,9 +756,9 @@ with middle_panel:
                 sub_maker = voice.tts(
                     text=play_content,
                     voice_name=voice_name,
-                    voice_rate=params.voice_rate,
+                    voice_rate=float(params.voice_rate) if params.voice_rate is not None else 1.0,
                     voice_file=audio_file,
-                    voice_volume=params.voice_volume,
+                    voice_volume=float(params.voice_volume) if params.voice_volume is not None else 1.0,
                 )
                 # if the voice file generation failed, try again with a default content.
                 if not sub_maker:
@@ -765,9 +766,9 @@ with middle_panel:
                     sub_maker = voice.tts(
                         text=play_content,
                         voice_name=voice_name,
-                        voice_rate=params.voice_rate,
+                        voice_rate=float(params.voice_rate) if params.voice_rate is not None else 1.0,
                         voice_file=audio_file,
-                        voice_volume=params.voice_volume,
+                        voice_volume=float(params.voice_volume) if params.voice_volume is not None else 1.0,
                     )
 
                 if sub_maker and os.path.exists(audio_file):

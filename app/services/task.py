@@ -9,8 +9,13 @@ from loguru import logger
 
 from app.config import config
 from app.models import const
-from app.models.schema import VideoConcatMode, VideoParams
-from app.services import llm, material, subtitle, video, voice
+from app.models.schema import (
+    MaterialInfo, VideoConcatMode, VideoParams,
+    VideoTransitionMode, VideoAspect
+)
+from app.services import llm
+from app.services.material import download_videos
+from app.services import subtitle, video, voice
 from app.services import state as sm
 from app.utils import utils
 
@@ -71,7 +76,8 @@ def save_script_data(task_id, video_script, video_terms, params):
     }
 
     with open(script_file, "w", encoding="utf-8") as f:
-        f.write(utils.to_json(script_data))
+        json_data = utils.to_json(script_data) or "{}"
+        f.write(json_data)
 
 
 def generate_audio(task_id, params, video_script):
@@ -142,30 +148,48 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
         return [material_info.url for material_info in materials]
     elif params.video_source == "comfyui":
         logger.info("\n\n## generating video with ComfyUI")
-        from app.services.comfyui import ComfyUIService
-        comfyui = ComfyUIService()
-        
-        # Use video terms as prompt if no specific prompt is provided
-        prompt = params.comfyui_prompt if params.comfyui_prompt else ", ".join(video_terms)
-        
-        output_dir = utils.task_dir(task_id)
-        video_path = comfyui.generate_video(
-            prompt=prompt,
-            video_aspect=params.video_aspect,
-            frames=params.comfyui_frames,
-            output_dir=output_dir
-        )
-        
-        if not video_path:
+        try:
+            from app.services.comfyui import ComfyUIService
+        except ImportError:
             sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
-            logger.error("Failed to generate video with ComfyUI")
+            logger.error("ComfyUI service not available. Please ensure ComfyUI is installed.")
             return None
             
-        material = MaterialInfo(provider="comfyui", url=video_path)
-        return [material.url]
+        try:
+            comfyui = ComfyUIService()
+            
+            # Use video terms as prompt if no specific prompt is provided
+            prompt = params.comfyui_prompt if params.comfyui_prompt else ", ".join(video_terms)
+            if not prompt:
+                sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+                logger.error("No prompt provided for ComfyUI video generation")
+                return None
+                
+            output_dir = utils.task_dir(task_id)
+            frames = params.comfyui_frames or 24  # Default to 24 frames if not specified
+            
+            video_path = comfyui.generate_video(
+                prompt=prompt,
+                video_aspect=params.video_aspect,
+                frames=frames,
+                output_dir=output_dir
+            )
+            
+            if not video_path or not os.path.exists(video_path):
+                sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+                logger.error("Failed to generate video with ComfyUI")
+                return None
+                
+            material = MaterialInfo(provider="comfyui", url=video_path)
+            return [material.url]
+            
+        except Exception as e:
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            logger.error(f"ComfyUI video generation failed: {str(e)}")
+            return None
     else:
         logger.info(f"\n\n## downloading videos from {params.video_source}")
-        downloaded_videos = material.download_videos(
+        downloaded_videos = download_videos(
             task_id=task_id,
             search_terms=video_terms,
             source=params.video_source,
@@ -184,17 +208,23 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
 
 
 def generate_final_videos(
-    task_id, params, downloaded_videos, audio_file, subtitle_path
+    task_id, params: VideoParams, downloaded_videos, audio_file, subtitle_path
 ):
     final_video_paths = []
     combined_video_paths = []
+    
+    # Ensure all parameters have valid values
+    video_count = max(1, params.video_count if params.video_count is not None else 1)
     video_concat_mode = (
-        params.video_concat_mode if params.video_count == 1 else VideoConcatMode.random
-    )
-    video_transition_mode = params.video_transition_mode
+        params.video_concat_mode if video_count == 1 else VideoConcatMode.random
+    ) or VideoConcatMode.random
+    video_transition_mode = params.video_transition_mode or VideoTransitionMode.none
+    video_aspect = params.video_aspect or VideoAspect.portrait
+    clip_duration = params.video_clip_duration or 5
+    threads = getattr(params, 'n_threads', 2)
 
     _progress = 50
-    for i in range(params.video_count):
+    for i in range(video_count):
         index = i + 1
         combined_video_path = path.join(
             utils.task_dir(task_id), f"combined-{index}.mp4"
@@ -204,15 +234,16 @@ def generate_final_videos(
             combined_video_path=combined_video_path,
             video_paths=downloaded_videos,
             audio_file=audio_file,
-            video_aspect=params.video_aspect,
+            video_aspect=video_aspect,
             video_concat_mode=video_concat_mode,
             video_transition_mode=video_transition_mode,
-            max_clip_duration=params.video_clip_duration,
-            threads=params.n_threads,
+            max_clip_duration=clip_duration,
+            threads=threads,
         )
 
-        _progress += 50 / params.video_count / 2
-        sm.state.update_task(task_id, progress=_progress)
+        progress_increment = int(50 / video_count / 2)
+        _progress += progress_increment
+        sm.state.update_task(task_id, progress=min(99, _progress))
 
         final_video_path = path.join(utils.task_dir(task_id), f"final-{index}.mp4")
 
@@ -225,8 +256,8 @@ def generate_final_videos(
             params=params,
         )
 
-        _progress += 50 / params.video_count / 2
-        sm.state.update_task(task_id, progress=_progress)
+        _progress += progress_increment
+        sm.state.update_task(task_id, progress=min(99, _progress))
 
         final_video_paths.append(final_video_path)
         combined_video_paths.append(combined_video_path)
@@ -236,7 +267,13 @@ def generate_final_videos(
 
 def start(task_id, params: VideoParams, stop_at: str = "video"):
     logger.info(f"start task: {task_id}, stop_at: {stop_at}")
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=5)
+    
+    # Ensure required parameters have default values
+    params.video_count = params.video_count or 1
+    params.video_clip_duration = params.video_clip_duration or 5
+    params.n_threads = getattr(params, 'n_threads', 2)
+    
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=0)
 
     if type(params.video_concat_mode) is str:
         params.video_concat_mode = VideoConcatMode(params.video_concat_mode)
@@ -247,7 +284,7 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
         sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
         return
 
-    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=10)
+    sm.state.update_task(task_id, state=const.TASK_STATE_PROCESSING, progress=15)
 
     if stop_at == "script":
         sm.state.update_task(
@@ -256,8 +293,16 @@ def start(task_id, params: VideoParams, stop_at: str = "video"):
         return {"script": video_script}
 
     # 2. Generate terms
-    video_terms = ""
-    if params.video_source != "local":
+    video_terms = []
+    if params.video_source == "local":
+        # For local files, we don't need search terms
+        if params.video_materials and len(params.video_materials) > 0:
+            video_terms = ["local video"]
+        else:
+            sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
+            logger.error("No local video materials provided")
+            return
+    else:
         video_terms = generate_terms(task_id, params, video_script)
         if not video_terms:
             sm.state.update_task(task_id, state=const.TASK_STATE_FAILED)
