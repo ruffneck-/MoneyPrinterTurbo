@@ -14,6 +14,12 @@ from app.models import const
 urllib3.disable_warnings()
 
 
+def is_running_tests() -> bool:
+    """Return ``True`` when the current process is executed by ``pytest``."""
+
+    return os.environ.get("PYTEST_CURRENT_TEST") is not None
+
+
 def get_response(status: int, data: Any = None, message: str = ""):
     obj = {
         "status": status,

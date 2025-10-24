@@ -17,6 +17,46 @@ from app.config import config
 from app.utils import utils
 
 
+def _get_edge_tts_timeout() -> float:
+    """Return the configured timeout for ``edge-tts`` requests."""
+
+    default_timeout = 5.0
+    try:
+        timeout_value = config.app.get("edge_tts_timeout", default_timeout)
+        if timeout_value is None:
+            return default_timeout
+        timeout_value = float(timeout_value)
+        return max(timeout_value, 1.0)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid edge_tts_timeout value in config. Falling back to %.1f seconds",
+            default_timeout,
+        )
+        return default_timeout
+
+
+def _get_edge_tts_max_retries() -> int:
+    """Return how many times the ``edge-tts`` request should be retried."""
+
+    default_retries = 3
+    try:
+        retries_value = config.app.get("edge_tts_max_retries", default_retries)
+        if retries_value is None:
+            return default_retries
+        retries_value = int(retries_value)
+        return max(retries_value, 1)
+    except (TypeError, ValueError):
+        logger.warning(
+            "Invalid edge_tts_max_retries value in config. Falling back to %d attempts",
+            default_retries,
+        )
+        return default_retries
+
+
+EDGE_TTS_TIMEOUT_SECONDS = _get_edge_tts_timeout()
+EDGE_TTS_MAX_RETRIES = _get_edge_tts_max_retries()
+
+
 def _ensure_parent_dir(file_path: str) -> None:
     """Ensure that the directory for ``file_path`` exists."""
 
@@ -1188,7 +1228,7 @@ def azure_tts_v1(
     text = text.strip()
     rate_str = convert_rate_to_percent(voice_rate)
     _ensure_parent_dir(voice_file)
-    for i in range(3):
+    for i in range(EDGE_TTS_MAX_RETRIES):
         try:
             logger.info(f"start, voice name: {voice_name}, try: {i + 1}")
 
@@ -1205,13 +1245,23 @@ def azure_tts_v1(
                             )
                 return sub_maker
 
-            sub_maker = asyncio.run(_do())
+            async def _do_with_timeout() -> SubMaker:
+                return await asyncio.wait_for(
+                    _do(), timeout=EDGE_TTS_TIMEOUT_SECONDS
+                )
+
+            sub_maker = asyncio.run(_do_with_timeout())
             if not sub_maker or not sub_maker.subs:
                 logger.warning("failed, sub_maker is None or sub_maker.subs is None")
                 continue
 
             logger.info(f"completed, output file: {voice_file}")
             return sub_maker
+        except asyncio.TimeoutError:
+            logger.error(
+                "edge-tts request timed out after %.1f seconds", EDGE_TTS_TIMEOUT_SECONDS
+            )
+            break
         except Exception as e:
             logger.error(f"failed, error: {str(e)}")
     logger.info("azure_tts_v1 falling back to offline synthesis")

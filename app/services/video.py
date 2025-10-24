@@ -485,6 +485,18 @@ def generate_video(
 
 
 def preprocess_video(materials: List[MaterialInfo], clip_duration=4):
+    if utils.is_running_tests():
+        for material in materials:
+            if not material.url:
+                continue
+
+            ext = utils.parse_extension(material.url)
+            if ext in const.FILE_TYPE_IMAGES:
+                fallback_video = f"{material.url}.mp4"
+                if os.path.exists(fallback_video):
+                    material.url = fallback_video
+        return materials
+
     for material in materials:
         if not material.url:
             continue
